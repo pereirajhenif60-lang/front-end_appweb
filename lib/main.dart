@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'admin.dart';
 
 void main() => runApp(const MyApp());
 
@@ -136,6 +137,13 @@ class _EscolhaArea extends StatelessWidget {
             _Emblema(
                 area: Area.psicologia, onTap: () => onSelecionar(Area.psicologia)),
           ],
+        ),
+        const SizedBox(height: 40),
+        TextButton.icon(
+          onPressed: () => Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const AdminLoginPage())),
+          icon: const Icon(Icons.admin_panel_settings_outlined),
+          label: const Text('Acesso administrativo'),
         ),
       ],
     );
