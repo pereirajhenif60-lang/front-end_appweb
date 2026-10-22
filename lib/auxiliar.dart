@@ -561,6 +561,11 @@ class PaginaRemarcarCancelar extends StatelessWidget {
       alerta(c, 'Horário inválido', 'Escolha um horário futuro.');
       return;
     }
+    if (!dentroDoExpediente(x.area, n)) {
+      alerta(c, 'Fora do expediente',
+          'O horário escolhido está fora do expediente da ${x.area.nome} (${descricaoExpediente(x.area)}). Escolha outro horário.');
+      return;
+    }
     final ocupado = dados.atendimentos.any((y) =>
         y != x && y.prof == x.prof && y.aberto && y.quando.difference(n).abs().inMinutes < 60);
     if (ocupado) {
@@ -572,6 +577,7 @@ class PaginaRemarcarCancelar extends StatelessWidget {
     x.quando = n;
     x.status = StatusAtend.agendado;
     x.lembrete = StatusLembrete.naoEnviado;
+    x.avisoClinica = 'A clínica remarcou o seu agendamento para ${formatarDataHora(n)}.';
     dados.log(
         'Agendamento #${x.id} remarcado de ${formatarDataHora(antigo)} para ${formatarDataHora(n)} (${x.cliente.nome})',
         _area,
@@ -586,6 +592,7 @@ class PaginaRemarcarCancelar extends StatelessWidget {
         rotulo: 'Cancelar agendamento');
     if (!ok) return;
     x.status = StatusAtend.cancelado;
+    x.avisoClinica = 'A clínica cancelou o seu agendamento de ${formatarDataHora(x.quando)}.';
     dados.log('Agendamento #${x.id} cancelado (${x.cliente.nome}, ${formatarDataHora(x.quando)})',
         _area, _autor);
     if (c.mounted) msg(c, 'Agendamento cancelado. Agenda atualizada.');
@@ -597,7 +604,7 @@ class PaginaRemarcarCancelar extends StatelessWidget {
           ..sort((x, y) => x.quando.compareTo(y.quando));
         return Pagina(
           titulo: 'Remarcar/cancelar serviço – ${_area.nome}',
-          sub: 'Selecione o agendamento e escolha remarcar ou cancelar. O sistema valida a antecedência mínima de 24h; com menos que isso, a ação é bloqueada e o motivo é informado.',
+          sub: 'Selecione o agendamento e escolha alterar, remarcar ou cancelar. O sistema valida a antecedência mínima de 24h e o expediente; com menos que isso, a ação é bloqueada e o motivo é informado. A agenda interna e a página do cliente são atualizadas na hora.',
           filhos: [
             tabela(
               ['Nº', 'Data/hora', 'Cliente', 'Profissional', 'Serviço', 'Status', 'Ações'],
@@ -612,6 +619,11 @@ class PaginaRemarcarCancelar extends StatelessWidget {
                     chipStatus(x.status),
                     Row(mainAxisSize: MainAxisSize.min, children: [
                       IconButton(
+                          tooltip: 'Alterar agendamento',
+                          icon: const Icon(Icons.edit),
+                          onPressed: () =>
+                              alterarAgendamento(c, x, autor: _autor, admin: false)),
+                      IconButton(
                           tooltip: 'Remarcar',
                           icon: const Icon(Icons.edit_calendar),
                           onPressed: () => _remarcar(c, x)),
@@ -623,6 +635,7 @@ class PaginaRemarcarCancelar extends StatelessWidget {
                   ]
               ],
             ),
+            ...secaoAlteracoesAgenda(c, _area),
           ],
         );
       });

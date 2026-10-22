@@ -142,11 +142,16 @@ class Atend {
 
   final int id;
   final Area area;
-  final Usuario cliente, prof;
-  final String servico;
+  final Usuario cliente;
+  Usuario prof;
+  String servico;
   DateTime quando;
   StatusAtend status;
   StatusLembrete lembrete;
+
+  /// Aviso da clínica para o cliente (alteração, remarcação ou cancelamento feitos pela equipe).
+  /// Aparece na página do cliente até ele marcar "Ciente".
+  String? avisoClinica;
 
   bool get aberto =>
       status == StatusAtend.agendado || status == StatusAtend.confirmado;
@@ -664,6 +669,7 @@ const _matriz = <(String, String)>[
   ('Concluir atendimento de estética', 'TX'),
   ('Agendar serviço', 'TX'),
   ('Remarcar/cancelar serviço', 'TXC'),
+  ('Alterar agendamento (agenda interna)', 'TX'),
 ];
 
 class PaginaAcesso extends StatelessWidget {
@@ -744,6 +750,12 @@ Future<void> _remarcar(BuildContext c, Atend a) async {
   final n = await escolherDataHora(
       c, a.quando.isAfter(DateTime.now()) ? a.quando : emHoras(24));
   if (n == null || !c.mounted) return;
+  if (!dentroDoExpediente(a.area, n)) {
+    final seguir = await confirmar(c, 'Fora do expediente',
+        'O horário escolhido está fora do expediente da ${a.area.nome} (${descricaoExpediente(a.area)}). Remarcar mesmo assim?',
+        rotulo: 'Remarcar mesmo assim');
+    if (!seguir || !c.mounted) return;
+  }
   final conflito = dados.atendimentos.any((x) =>
       x != a && x.prof == a.prof && x.aberto && x.quando.difference(n).abs().inMinutes < 60);
   if (conflito) {
@@ -755,6 +767,7 @@ Future<void> _remarcar(BuildContext c, Atend a) async {
   a.quando = n;
   a.status = StatusAtend.agendado;
   a.lembrete = StatusLembrete.naoEnviado;
+  a.avisoClinica = 'A clínica remarcou o seu agendamento para ${formatarDataHora(n)}.';
   dados.log(
       'Agendamento #${a.id} remarcado de ${formatarDataHora(antigo)} para ${formatarDataHora(n)} (${a.cliente.nome})',
       a.area);
@@ -768,6 +781,7 @@ Future<void> _cancelar(BuildContext c, Atend a) async {
       rotulo: 'Cancelar agendamento');
   if (!ok) return;
   a.status = StatusAtend.cancelado;
+  a.avisoClinica = 'A clínica cancelou o seu agendamento de ${formatarDataHora(a.quando)}.';
   dados.log('Agendamento #${a.id} cancelado (${a.cliente.nome}, ${formatarDataHora(a.quando)})', a.area);
 }
 
@@ -785,7 +799,7 @@ class PaginaAgenda extends StatelessWidget {
           ..sort((x, y) => x.quando.compareTo(y.quando));
         return Pagina(
           titulo: 'Agenda – ${a.nome}',
-          sub: 'Agendar, remarcar e cancelar. O sistema impede conflitos de horário e bloqueia remarcação/cancelamento com menos de 24h (exceção só com sua autorização).',
+          sub: 'Agendar, alterar, remarcar e cancelar. O sistema impede conflitos de horário e bloqueia remarcação/cancelamento com menos de 24h (exceção só com sua autorização). Tudo o que clientes e auxiliares mudam aparece aqui na hora.',
           acoes: [
             FilledButton.icon(
                 onPressed: () => abrirFormAtend(c, a, agendar: true),
@@ -808,6 +822,10 @@ class PaginaAgenda extends StatelessWidget {
                     x.aberto
                         ? Row(mainAxisSize: MainAxisSize.min, children: [
                             IconButton(
+                                tooltip: 'Alterar agendamento',
+                                icon: const Icon(Icons.edit),
+                                onPressed: () => alterarAgendamento(c, x)),
+                            IconButton(
                                 tooltip: 'Remarcar',
                                 icon: const Icon(Icons.edit_calendar),
                                 onPressed: () => _remarcar(c, x)),
@@ -820,9 +838,261 @@ class PaginaAgenda extends StatelessWidget {
                   ]
               ],
             ),
+            ...secaoAlteracoesAgenda(c, a),
           ],
         );
       });
+}
+
+// ───── admin/expediente.dart ─────
+// Horários de atendimento (expediente). Ajuste conforme a rotina da clínica.
+const horaInicioPorArea = {Area.estetica: 9, Area.psicologia: 8};
+const horaFimPorArea = {Area.estetica: 18, Area.psicologia: 17}; // o último horário começa 1h antes
+const horaAlmoco = 12; // sem atendimento nesse horário
+const diasAtendimentoPorArea = {
+  Area.estetica: {1, 2, 3, 4, 5, 6}, // segunda a sábado (1 = segunda)
+  Area.psicologia: {1, 2, 3, 4, 5}, // segunda a sexta
+};
+
+/// Dentro do expediente da área (dias e horários de atendimento)?
+bool dentroDoExpediente(Area a, DateTime h) =>
+    diasAtendimentoPorArea[a]!.contains(h.weekday) &&
+    h.hour >= horaInicioPorArea[a]! &&
+    h.hour < horaFimPorArea[a]! &&
+    h.hour != horaAlmoco;
+
+String descricaoExpediente(Area a) {
+  final dias = diasAtendimentoPorArea[a]!.contains(6) ? 'segunda a sábado' : 'segunda a sexta';
+  return '$dias, das ${horaInicioPorArea[a]}h às ${horaFimPorArea[a]}h, sem atendimento às ${horaAlmoco}h';
+}
+
+/// Horários (de hora em hora) disponíveis no expediente de um dia.
+List<DateTime> horariosDoDia(Area a, DateTime dia) {
+  if (!diasAtendimentoPorArea[a]!.contains(dia.weekday)) return [];
+  return [
+    for (var h = horaInicioPorArea[a]!; h < horaFimPorArea[a]!; h++)
+      if (h != horaAlmoco) DateTime(dia.year, dia.month, dia.day, h),
+  ];
+}
+
+// ───── admin/alterar_agendamento.dart ─────
+/// Alterações recentes da agenda (remarcações, cancelamentos e alterações), feitas por
+/// clientes, auxiliares ou administradores. Vem do log de auditoria.
+List<Widget> secaoAlteracoesAgenda(BuildContext c, Area a) {
+  final l = dados.logs
+      .where((e) =>
+          e.contains('[${a.nome}]') &&
+          e.contains('Agendamento #') &&
+          (e.contains('remarcado') || e.contains('cancelado') || e.contains('alterado')))
+      .take(8)
+      .toList();
+  return [
+    const SizedBox(height: 24),
+    Text('Alterações recentes da agenda', style: Theme.of(c).textTheme.titleMedium),
+    const SizedBox(height: 4),
+    const Text(
+      'Inclui o que clientes, auxiliares e administradores remarcaram, cancelaram ou alteraram.',
+      style: TextStyle(fontSize: 12),
+    ),
+    const SizedBox(height: 8),
+    if (l.isEmpty)
+      const Card(
+          child: Padding(padding: EdgeInsets.all(16), child: Text('Nenhuma alteração recente.')))
+    else
+      Card(
+        child: Column(children: [
+          for (final e in l)
+            ListTile(
+              dense: true,
+              leading: Icon(
+                  e.contains('cancelado')
+                      ? Icons.event_busy
+                      : e.contains('alterado')
+                          ? Icons.edit_calendar
+                          : Icons.update,
+                  size: 20),
+              title: Text(e, style: const TextStyle(fontSize: 13)),
+            ),
+        ]),
+      ),
+  ];
+}
+
+/// Altera um agendamento da agenda interna (profissional, procedimento e/ou horário).
+/// [admin] = false no painel do auxiliar (sem exceções de expediente nem da regra de 24h).
+Future<void> alterarAgendamento(BuildContext c, Atend x, {String? autor, bool admin = true}) async {
+  if (!x.aberto) {
+    alerta(c, 'Agendamento encerrado',
+        'Só é possível alterar agendamentos em aberto (agendados ou confirmados).');
+    return;
+  }
+  final ok = await showDialog<bool>(
+    context: c,
+    builder: (_) => AlterarAgendamentoDialog(x: x, autor: autor, admin: admin),
+  );
+  if (ok == true && c.mounted) {
+    msg(c, 'Agendamento alterado. Agenda atualizada e cliente avisado na página dele.');
+  }
+}
+
+class AlterarAgendamentoDialog extends StatefulWidget {
+  const AlterarAgendamentoDialog({super.key, required this.x, this.autor, this.admin = true});
+
+  final Atend x;
+  final String? autor;
+  final bool admin;
+
+  @override
+  State<AlterarAgendamentoDialog> createState() => _AlterarAgendamentoDialogState();
+}
+
+class _AlterarAgendamentoDialogState extends State<AlterarAgendamentoDialog> {
+  late Usuario _prof = widget.x.prof;
+  late String _serv = widget.x.servico;
+  late DateTime _quando = widget.x.quando;
+  final _motivo = TextEditingController();
+  String? _erro;
+
+  List<Usuario> get _profs {
+    final l = dados.profissionais(widget.x.area);
+    return l.contains(widget.x.prof) ? l : [widget.x.prof, ...l];
+  }
+
+  List<String> get _servs {
+    final l = servicosDe(widget.x.area);
+    return l.contains(widget.x.servico) ? l : [widget.x.servico, ...l];
+  }
+
+  @override
+  void dispose() {
+    _motivo.dispose();
+    super.dispose();
+  }
+
+  Future<void> _salvar() async {
+    final x = widget.x;
+    final m = _motivo.text.trim();
+    final mudouHorario = _quando != x.quando;
+    final mudouProf = _prof != x.prof;
+    final mudouServ = _serv != x.servico;
+
+    if (!mudouHorario && !mudouProf && !mudouServ) {
+      setState(() => _erro = 'Nenhuma alteração foi feita.');
+      return;
+    }
+    if (m.length < 5) {
+      setState(() => _erro = 'Explique o motivo da alteração (mínimo de 5 caracteres).');
+      return;
+    }
+    if (mudouHorario || mudouProf) {
+      if (!_quando.isAfter(DateTime.now())) {
+        setState(() => _erro = 'Escolha um horário futuro.');
+        return;
+      }
+      bool perto(Atend y) => y != x && y.aberto && y.quando.difference(_quando).abs().inMinutes < 60;
+      if (dados.atendimentos.any((y) => perto(y) && y.prof == _prof)) {
+        setState(() => _erro =
+            '${_prof.nome} já tem agendamento próximo a esse horário. Sugestão: ${formatarDataHora(_quando.add(const Duration(hours: 1)))}.');
+        return;
+      }
+      if (dados.atendimentos.any((y) => perto(y) && y.cliente == x.cliente)) {
+        setState(() => _erro = '${x.cliente.nome} já tem outro agendamento nesse horário.');
+        return;
+      }
+    }
+    if (mudouHorario) {
+      // Regra de 24h: só o administrador pode abrir exceção.
+      if (x.quando.difference(DateTime.now()).inHours < 24) {
+        if (!widget.admin) {
+          setState(() => _erro =
+              'Não é possível alterar o horário com menos de 24h de antecedência. Procure o Administrador.');
+          dados.log('Alteração de horário bloqueada (menos de 24h): #${x.id} ${x.cliente.nome}',
+              x.area, widget.autor);
+          return;
+        }
+        if (!await _prazo24h(context, x, 'alteração de horário')) return;
+        if (!mounted) return;
+      }
+      // Expediente: só o administrador pode abrir exceção.
+      if (!dentroDoExpediente(x.area, _quando)) {
+        if (!widget.admin) {
+          setState(() => _erro =
+              'Horário fora do expediente da ${x.area.nome} (${descricaoExpediente(x.area)}).');
+          return;
+        }
+        final seguir = await confirmar(context, 'Fora do expediente',
+            'O horário está fora do expediente (${descricaoExpediente(x.area)}). Alterar mesmo assim?',
+            rotulo: 'Alterar mesmo assim');
+        if (!seguir || !mounted) return;
+      }
+    }
+
+    final partes = <String>[
+      if (mudouProf) 'profissional ${x.prof.nome} → ${_prof.nome}',
+      if (mudouServ) 'procedimento ${x.servico} → $_serv',
+      if (mudouHorario) 'horário ${formatarDataHora(x.quando)} → ${formatarDataHora(_quando)}',
+    ];
+    x.prof = _prof;
+    x.servico = _serv;
+    if (mudouHorario) {
+      x.quando = _quando;
+      x.status = StatusAtend.agendado;
+      x.lembrete = StatusLembrete.naoEnviado;
+    }
+    x.avisoClinica = 'A clínica alterou o seu agendamento: ${partes.join('; ')}.';
+    dados.log('Agendamento #${x.id} alterado (${x.cliente.nome}): ${partes.join('; ')}. Motivo: $m',
+        x.area, widget.autor);
+    Navigator.pop(context, true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final x = widget.x;
+    return AlertDialog(
+      title: Text('Alterar agendamento #${x.id}'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${x.cliente.nome} • ${x.area.nome}',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 12),
+            seletor<Usuario>('Profissional', _prof, _profs,
+                (v) => setState(() => _prof = v!), (u) => u.nome),
+            const SizedBox(height: 12),
+            seletor<String>('Procedimento', _serv, _servs, (v) => setState(() => _serv = v!)),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final n = await escolherDataHora(context, _quando);
+                if (n != null && mounted) setState(() => _quando = n);
+              },
+              icon: const Icon(Icons.schedule),
+              label: Text(formatarDataHora(_quando)),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _motivo,
+              maxLines: 2,
+              decoration: decoracaoCampo('Motivo da alteração (obrigatório)'),
+            ),
+            if (_erro != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(_erro!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              ),
+            const SizedBox(height: 8),
+            const Text('O cliente verá o aviso da alteração na página dele.',
+                style: TextStyle(fontSize: 12)),
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+        FilledButton(onPressed: _salvar, child: const Text('Salvar alteração')),
+      ],
+    );
+  }
 }
 
 // ───── admin/paginas/atendimentos.dart ─────

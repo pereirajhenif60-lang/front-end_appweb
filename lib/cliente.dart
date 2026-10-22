@@ -5,26 +5,11 @@ import 'admin.dart';
 import 'main.dart';
 
 // ───── cliente/regras.dart ─────
-// Horários de atendimento. Ajuste conforme a rotina da clínica.
-// Os procedimentos e valores vêm de procedimentosDe(area), em admin.dart.
-const _horaInicio = {Area.estetica: 9, Area.psicologia: 8};
-const _horaFim = {Area.estetica: 18, Area.psicologia: 17}; // o último horário começa 1h antes
-const _horaAlmoco = 12; // sem atendimento nesse horário
-const _diasAtendimento = {
-  Area.estetica: {1, 2, 3, 4, 5, 6}, // segunda a sábado (1 = segunda)
-  Area.psicologia: {1, 2, 3, 4, 5}, // segunda a sexta
-};
+// Os horários de atendimento (expediente) e os procedimentos/valores ficam em admin.dart:
+// horaInicioPorArea, horaFimPorArea, procedimentosDe(area) etc.
 const _duracaoMin = 60; // cada atendimento ocupa 1 hora
 const _antecedenciaHoras = 1; // só dá para agendar com pelo menos 1h de antecedência
 const _horizonteDias = 60; // agenda aberta pelos próximos 60 dias
-
-List<DateTime> _horariosDoDia(Area a, DateTime dia) {
-  if (!_diasAtendimento[a]!.contains(dia.weekday)) return [];
-  return [
-    for (var h = _horaInicio[a]!; h < _horaFim[a]!; h++)
-      if (h != _horaAlmoco) DateTime(dia.year, dia.month, dia.day, h),
-  ];
-}
 
 bool _ocupaHorario(Atend x) => x.aberto || x.status == StatusAtend.emAtendimento;
 
@@ -47,7 +32,7 @@ List<Usuario> _livres(Area a, DateTime horario, Usuario cliente,
 }
 
 bool _diaTemHorario(Area a, DateTime dia, Usuario cliente, {Usuario? prof, Atend? ignorar}) =>
-    _horariosDoDia(a, dia).any(
+    horariosDoDia(a, dia).any(
         (h) => _livres(a, h, cliente, prof: prof, ignorar: ignorar).isNotEmpty);
 
 DateTime? _primeiroDiaLivre(Area a, Usuario cliente, {Usuario? prof, Atend? ignorar}) {
@@ -151,7 +136,7 @@ class _SeletorHorarioState extends State<SeletorHorario> {
         Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: [for (final h in _horariosDoDia(widget.area, dia)) _chip(h)],
+          children: [for (final h in horariosDoDia(widget.area, dia)) _chip(h)],
         ),
       ],
     );
@@ -673,6 +658,28 @@ class MeusAgendamentos extends StatelessWidget {
                         if (x.aberto)
                           chipRotulo('Lembrete: ${x.lembrete.rotulo}', x.lembrete.cor),
                       ]),
+                      if (x.avisoClinica != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withAlpha(35),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(children: [
+                            const Icon(Icons.info_outline, color: Colors.orange, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(x.avisoClinica!, style: const TextStyle(fontSize: 13))),
+                            TextButton(
+                              onPressed: () {
+                                x.avisoClinica = null;
+                                dados.atualizar();
+                              },
+                              child: const Text('Ciente'),
+                            ),
+                          ]),
+                        ),
+                      ],
                       if (x.aberto) ...[
                         const SizedBox(height: 8),
                         Wrap(spacing: 8, runSpacing: 4, children: [
