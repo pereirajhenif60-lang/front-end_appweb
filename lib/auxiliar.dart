@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'admin.dart';
 import 'caixa.dart';
 import 'main.dart';
+import 'recepcao.dart';
 
 /// Painel do auxiliar (Psicologia ou Estética): agenda, recepção, conclusão, caixa.
 class AuxiliarPanel extends StatelessWidget {
@@ -22,6 +23,8 @@ class AuxiliarPanel extends StatelessWidget {
       sair: (c) => botaoSair(c,
           acao: 'Logout do auxiliar', area: area, autor: auxiliar.nome),
       secoes: [
+        SecaoPainel(Icons.how_to_reg, 'Recepção e fila', PaginaRecepcao(area, autor: auxiliar.nome)),
+        SecaoPainel(Icons.tv, 'Painel da fila', PaginaPainelFila(area)),
         SecaoPainel(Icons.event_available, 'Agendar serviço', PaginaAgendarServico(auxiliar)),
         SecaoPainel(Icons.edit_calendar, 'Remarcar/cancelar serviço', PaginaRemarcarCancelar(auxiliar)),
         SecaoPainel(Icons.login, 'Receber cliente', PaginaReceberCliente(auxiliar)),
@@ -88,16 +91,7 @@ class _PaginaReceberClienteState extends State<PaginaReceberCliente> {
         _auxiliar.nome);
   }
 
-  void _receber(Atend x) {
-    if (!dados.usuarios.contains(x.cliente) || !x.cliente.ativo) {
-      _impedido(x.cliente);
-      return;
-    }
-    x.status = StatusAtend.emAtendimento;
-    dados.log('Cliente recebido para atendimento: ${x.cliente.nome} (#${x.id})', _area,
-        _auxiliar.nome);
-    msg(context, 'Recebimento registrado: atendimento de ${x.cliente.nome} iniciado.');
-  }
+  void _receber(Atend x) => receberAtendimento(context, x, autor: _auxiliar.nome);
 
   Future<void> _semAgendamento(Usuario cliente) async {
     if (!cliente.ativo) {
@@ -137,7 +131,8 @@ class _PaginaReceberClienteState extends State<PaginaReceberCliente> {
     );
     if (ok != true || !mounted) return;
     dados.atendimentos.add(Atend(dados.proximoId(), _area, cliente, prof, serv,
-        DateTime.now(), StatusAtend.emAtendimento));
+        DateTime.now(), StatusAtend.emAtendimento)
+      ..iniciadoEm = DateTime.now());
     dados.log('Cliente recebido sem agendamento: ${cliente.nome} • $serv com ${prof.nome}', _area,
         _auxiliar.nome);
     msg(context, 'Recebimento registrado: atendimento de ${cliente.nome} iniciado.');
@@ -154,6 +149,7 @@ class _PaginaReceberClienteState extends State<PaginaReceberCliente> {
             cl.ativo
                 ? chipRotulo('Cadastro confirmado', Colors.green, icone: Icons.verified_user_outlined)
                 : chipRotulo('Cadastro desativado', Colors.grey, icone: Icons.block),
+            chipSituacaoCliente(cl),
             Text(cl.contato),
           ]),
           const SizedBox(height: 12),
@@ -168,6 +164,7 @@ class _PaginaReceberClienteState extends State<PaginaReceberCliente> {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
                     Text('${formatarDataHora(x.quando)} • ${x.servico}'),
+                    chipConfirmacao(x),
                     FilledButton.icon(
                       onPressed: () => _receber(x),
                       icon: const Icon(Icons.login),
@@ -231,14 +228,16 @@ class _PaginaReceberClienteState extends State<PaginaReceberCliente> {
             Text('Agendamentos em aberto', style: Theme.of(c).textTheme.titleMedium),
             const SizedBox(height: 8),
             tabela(
-              ['Nº', 'Data/hora', 'Cliente', 'Serviço', 'Status', 'Ação'],
+              ['Nº', 'Data/hora', 'Cliente', 'Situação do cliente', 'Serviço', 'Confirmação', 'Status', 'Ação'],
               [
                 for (final x in abertos)
                   [
                     Text('#${x.id}'),
                     Text(formatarDataHora(x.quando)),
                     Text(x.cliente.nome),
+                    chipSituacaoCliente(x.cliente),
                     Text(x.servico),
+                    chipConfirmacao(x),
                     chipStatus(x.status),
                     TextButton.icon(
                         onPressed: () => _receber(x),
@@ -261,13 +260,8 @@ class PaginaConcluirAtendimento extends StatelessWidget {
 
   Area get _area => auxiliar.area;
 
-  Future<void> _concluir(BuildContext c, Atend x) async {
-    final ok = await showDialog<bool>(
-        context: c, builder: (_) => _ConcluirDialog(x: x, auxiliar: auxiliar));
-    if (ok == true && c.mounted) {
-      msg(c, 'Atendimento concluído. Disponível para lançamento no caixa.');
-    }
-  }
+  Future<void> _concluir(BuildContext c, Atend x) =>
+      concluirAtendimento(c, x, autor: auxiliar.nome);
 
   @override
   Widget build(BuildContext context) => Obs((c) {
@@ -290,13 +284,17 @@ class PaginaConcluirAtendimento extends StatelessWidget {
             Text('Atendimentos em andamento', style: Theme.of(c).textTheme.titleMedium),
             const SizedBox(height: 8),
             tabela(
-              ['Nº', 'Início', 'Cliente', 'Serviço', 'Status', 'Ação'],
+              ['Nº', 'Senha', 'Início', 'Em atendimento', 'Cliente', 'Situação do cliente', 'Confirmação', 'Serviço', 'Status', 'Ação'],
               [
                 for (final x in andamento)
                   [
                     Text('#${x.id}'),
-                    Text(formatarDataHora(x.quando)),
+                    celulaSenha(x),
+                    Text(formatarDataHora(x.iniciadoEm ?? x.quando)),
+                    celulaTempo(x),
                     Text(x.cliente.nome),
+                    chipSituacaoCliente(x.cliente),
+                    chipConfirmacao(x),
                     Text(x.servico),
                     chipStatus(x.status),
                     FilledButton.icon(
@@ -310,7 +308,7 @@ class PaginaConcluirAtendimento extends StatelessWidget {
             Text('Concluídos hoje', style: Theme.of(c).textTheme.titleMedium),
             const SizedBox(height: 8),
             tabela(
-              ['Nº', 'Data/hora', 'Cliente', 'Serviço', 'Caixa'],
+              ['Nº', 'Data/hora', 'Cliente', 'Serviço', 'Duração', 'Caixa'],
               [
                 for (final x in hoje)
                   [
@@ -318,6 +316,7 @@ class PaginaConcluirAtendimento extends StatelessWidget {
                     Text(formatarDataHora(x.quando)),
                     Text(x.cliente.nome),
                     Text(x.servico),
+                    celulaTempo(x),
                     Text(x.lancado ? '${formatarReais(x.valorPago)} (${x.formasPagas})' : 'a lançar'),
                   ]
               ],
@@ -325,67 +324,6 @@ class PaginaConcluirAtendimento extends StatelessWidget {
           ],
         );
       });
-}
-
-class _ConcluirDialog extends StatefulWidget {
-  const _ConcluirDialog({required this.x, required this.auxiliar});
-
-  final Atend x;
-  final Usuario auxiliar;
-
-  @override
-  State<_ConcluirDialog> createState() => _ConcluirDialogState();
-}
-
-class _ConcluirDialogState extends State<_ConcluirDialog> {
-  bool _confirmou = false;
-  String? _erro;
-
-  void _concluir() {
-    final x = widget.x;
-    final autor = widget.auxiliar.nome;
-    if (!_confirmou) {
-      setState(() =>
-          _erro = 'Ação bloqueada: confirme no sistema que o atendimento foi realizado.');
-      dados.log('Conclusão bloqueada sem confirmação: ${x.cliente.nome} (#${x.id})', x.area, autor);
-      return;
-    }
-    x.status = StatusAtend.concluido;
-    dados.log(
-        'Atendimento concluído: ${x.cliente.nome} (#${x.id}), disponível para lançamento no caixa',
-        x.area,
-        autor);
-    Navigator.pop(context, true);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final x = widget.x;
-    return AlertDialog(
-      title: const Text('Concluir atendimento'),
-      content: SizedBox(
-        width: 400,
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('${x.cliente.nome} • ${x.servico}',
-              style: const TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          CheckboxListTile(
-            value: _confirmou,
-            onChanged: (v) => setState(() => _confirmou = v ?? false),
-            controlAffinity: ListTileControlAffinity.leading,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Confirmo que o atendimento foi realizado.'),
-          ),
-          if (_erro != null)
-            Text(_erro!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-        ]),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-        FilledButton(onPressed: _concluir, child: const Text('Concluir')),
-      ],
-    );
-  }
 }
 
 // ───────────────────────── Agendar serviço ─────────────────────────

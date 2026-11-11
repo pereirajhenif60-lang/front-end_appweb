@@ -5,6 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'admin.dart';
 import 'auxiliar.dart';
 import 'cliente.dart';
+import 'recepcao.dart';
 
 // ───── core/area.dart ─────
 /// Áreas disponíveis no app.
@@ -1078,6 +1079,12 @@ class _EscolhaArea extends StatelessWidget {
           runSpacing: 8,
           alignment: WrapAlignment.center,
           children: [
+            TextButton.icon(
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const PainelFilaPage())),
+              icon: const Icon(Icons.tv),
+              label: const Text('Painel da fila'),
+            ),
             TextButton.icon(
               onPressed: () => Navigator.push(context,
                   MaterialPageRoute(builder: (_) => const AuxiliarLoginPage())),

@@ -1,6 +1,5 @@
 import 'dart:typed_data';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import 'admin.dart';
@@ -714,12 +713,20 @@ class _FecharCaixaDialogState extends State<_FecharCaixaDialog> {
   String? _erroAnexo;
 
   Future<void> _anexar() async {
-    final r = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf', 'png', 'jpg', 'jpeg'],
-      allowMultiple: true,
-      withData: true,
-    );
+    dynamic r;
+    try {
+      r = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'png', 'jpg', 'jpeg'],
+        allowMultiple: true,
+        withData: true,
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(() => _erroAnexo = 'Anexar arquivos não está disponível: instale o pacote file_picker.');
+      }
+      return;
+    }
     if (r == null || !mounted) return;
     final recusados = <String>[];
     setState(() {

@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'admin.dart';
 import 'main.dart';
+import 'recepcao.dart';
 
 // ───── cliente/regras.dart ─────
 // Os horários de atendimento (expediente) e os procedimentos/valores ficam em admin.dart:
@@ -655,8 +656,8 @@ class MeusAgendamentos extends StatelessWidget {
                       const SizedBox(height: 10),
                       Wrap(spacing: 8, runSpacing: 8, children: [
                         chipStatus(x.status),
-                        if (x.aberto)
-                          chipRotulo('Lembrete: ${x.lembrete.rotulo}', x.lembrete.cor),
+                        if (x.aberto) chipConfirmacao(x),
+                        if (chipSenhaDoCliente(x) != null) chipSenhaDoCliente(x)!,
                       ]),
                       if (x.avisoClinica != null) ...[
                         const SizedBox(height: 8),

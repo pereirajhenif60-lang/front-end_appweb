@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'caixa.dart';
 import 'main.dart';
+import 'recepcao.dart';
 
 // ───── admin/constantes.dart ─────
 // TODO: em produção, valide o login do administrador no backend.
@@ -152,6 +153,9 @@ class Atend {
   /// Aviso da clínica para o cliente (alteração, remarcação ou cancelamento feitos pela equipe).
   /// Aparece na página do cliente até ele marcar "Ciente".
   String? avisoClinica;
+
+  /// Início e fim do atendimento (preenchidos ao receber o cliente e ao concluir).
+  DateTime? iniciadoEm, concluidoEm;
 
   bool get aberto =>
       status == StatusAtend.agendado || status == StatusAtend.confirmado;
@@ -808,17 +812,18 @@ class PaginaAgenda extends StatelessWidget {
           ],
           filhos: [
             tabela(
-              ['Nº', 'Data/hora', 'Cliente', 'Profissional', 'Serviço', 'Status', 'Lembrete', 'Ações'],
+              ['Nº', 'Data/hora', 'Cliente', 'Situação do cliente', 'Profissional', 'Serviço', 'Status', 'Confirmação', 'Ações'],
               [
                 for (final x in l)
                   [
                     Text('#${x.id}'),
                     Text(formatarDataHora(x.quando)),
                     Text(x.cliente.nome),
+                    chipSituacaoCliente(x.cliente),
                     Text(x.prof.nome),
                     Text(x.servico),
                     chipStatus(x.status),
-                    Text(x.lembrete.rotulo),
+                    chipConfirmacao(x),
                     x.aberto
                         ? Row(mainAxisSize: MainAxisSize.min, children: [
                             IconButton(
@@ -1096,33 +1101,11 @@ class _AlterarAgendamentoDialogState extends State<AlterarAgendamentoDialog> {
 }
 
 // ───── admin/paginas/atendimentos.dart ─────
-Future<void> _receber(BuildContext c, Atend x) async {
-  final ok = dados.usuarios.contains(x.cliente) && x.cliente.ativo;
-  if (!ok) {
-    alerta(c, 'Atendimento impedido',
-        'Cliente não cadastrado ou desativado. Faça o cadastro prévio em Usuários antes de iniciar o atendimento.');
-    dados.log('Recebimento impedido: cliente ${x.cliente.nome} não cadastrado/ativo', x.area);
-    return;
-  }
-  x.status = StatusAtend.emAtendimento;
-  dados.log('Cliente recebido para atendimento: ${x.cliente.nome} (#${x.id})', x.area);
-}
+/// Receber o cliente: mesma regra da recepção e do painel do auxiliar (integrado à fila de senhas).
+Future<void> _receber(BuildContext c, Atend x) async => receberAtendimento(c, x);
 
-Future<void> _concluir(BuildContext c, Atend x) async {
-  final ok = await confirmar(c, 'Concluir atendimento',
-      'Confirma que o serviço de ${x.cliente.nome} (${x.servico}) foi realizado?',
-      rotulo: 'Confirmar realização');
-  if (!ok) {
-    if (c.mounted) {
-      msg(c, 'Conclusão bloqueada: é necessário confirmar que o atendimento foi realizado.');
-    }
-    return;
-  }
-  x.status = StatusAtend.concluido;
-  dados.log(
-      'Atendimento concluído: ${x.cliente.nome} (#${x.id}), disponível para lançamento no caixa',
-      x.area);
-}
+/// Conclusão compartilhada com a recepção e o painel do auxiliar (confirmação obrigatória).
+Future<void> _concluir(BuildContext c, Atend x) => concluirAtendimento(c, x);
 
 class PaginaAtendimentos extends StatefulWidget {
   const PaginaAtendimentos(this.a, {super.key});
@@ -1145,7 +1128,7 @@ class _PaginaAtendimentosState extends State<PaginaAtendimentos> {
           ..sort((x, y) => y.quando.compareTo(x.quando));
         return Pagina(
           titulo: 'Atendimentos – ${widget.a.nome}',
-          sub: 'Receber o cliente, registrar e concluir atendimentos. Só clientes cadastrados são atendidos; a conclusão exige confirmação.',
+          sub: 'Receber o cliente, registrar e concluir atendimentos. Mostra a situação do cliente, a confirmação, a senha da fila e o tempo de atendimento. Só clientes cadastrados são atendidos; a conclusão exige confirmação. Receber e concluir valem igual em todos os painéis.',
           acoes: [
             FilledButton.icon(
                 onPressed: () => abrirFormAtend(c, widget.a, agendar: false),
@@ -1159,16 +1142,20 @@ class _PaginaAtendimentosState extends State<PaginaAtendimentos> {
                     (v) => setState(() => _st = v), (s) => s?.rotulo ?? 'Todos')),
             const SizedBox(height: 12),
             tabela(
-              ['Nº', 'Data/hora', 'Cliente', 'Responsável', 'Serviço', 'Status', 'Valor', 'Ações'],
+              ['Nº', 'Data/hora', 'Cliente', 'Situação do cliente', 'Responsável', 'Serviço', 'Confirmação', 'Senha', 'Status', 'Tempo', 'Valor', 'Ações'],
               [
                 for (final x in l)
                   [
                     Text('#${x.id}'),
                     Text(formatarDataHora(x.quando)),
                     Text(x.cliente.nome),
+                    chipSituacaoCliente(x.cliente),
                     Text(x.prof.nome),
                     Text(x.servico),
+                    chipConfirmacao(x),
+                    celulaSenha(x),
                     chipStatus(x.status),
+                    celulaTempo(x),
                     Text(x.lancado
                         ? '${formatarReais(x.valorPago)} (${x.formasPagas})'
                         : (x.status == StatusAtend.concluido ? 'a lançar' : '—')),
@@ -1248,7 +1235,7 @@ class PaginaFaltas extends StatelessWidget {
     final agora = DateTime.now();
     var n = 0;
     for (final x in dados.doArea(a)) {
-      if (x.aberto && x.quando.isBefore(agora)) {
+      if (x.aberto && x.quando.isBefore(agora) && !x.chegou) {
         x.status = StatusAtend.ausente;
         n++;
         final f = dados.faltas(x.cliente);
@@ -1613,13 +1600,14 @@ class PaginaLembretes extends StatelessWidget {
           ],
           filhos: [
             tabela(
-              ['Nº', 'Data/hora', 'Cliente', 'WhatsApp', 'Atendente', 'Lembrete', 'Ações'],
+              ['Nº', 'Data/hora', 'Cliente', 'Situação do cliente', 'WhatsApp', 'Atendente', 'Lembrete', 'Ações'],
               [
                 for (final x in l)
                   [
                     Text('#${x.id}'),
                     Text(formatarDataHora(x.quando)),
                     Text(x.cliente.nome),
+                    chipSituacaoCliente(x.cliente),
                     Text(x.cliente.contato),
                     Text(x.prof.nome),
                     chipRotulo(x.lembrete.rotulo, x.lembrete.cor),
@@ -1902,7 +1890,7 @@ class VisaoGeral extends StatelessWidget {
           for (final u in dados.clientes(a))
             if (dados.faltas(u) >= 3 && !dados.liberados.contains(u.id))
               '${u.nome} atingiu 3 faltas: novo agendamento bloqueado ou dependente da sua aprovação.',
-          if (l.any((x) => x.aberto && x.quando.isBefore(agora)))
+          if (l.any((x) => x.aberto && x.quando.isBefore(agora) && !x.chegou))
             'Há agendamentos vencidos sem check-in: processe as ausências na aba Faltas.',
           if (l.any((x) => x.lembrete == StatusLembrete.semResposta && x.aberto))
             'Há clientes que não confirmaram o lembrete no prazo.',
@@ -2278,6 +2266,8 @@ class AdminPanel extends StatelessWidget {
         SecaoPainel(Icons.people, 'Usuários', PaginaUsuarios(a)),
         SecaoPainel(Icons.calendar_month, 'Agenda', PaginaAgenda(a)),
         SecaoPainel(Icons.assignment_ind, 'Atendimentos', PaginaAtendimentos(a)),
+        SecaoPainel(Icons.how_to_reg, 'Recepção e fila', PaginaRecepcao(a)),
+        SecaoPainel(Icons.tv, 'Painel da fila', PaginaPainelFila(a)),
         SecaoPainel(Icons.event_busy, 'Faltas', PaginaFaltas(a)),
         SecaoPainel(Icons.notifications_active, 'Lembretes WhatsApp', PaginaLembretes(a)),
         SecaoPainel(Icons.point_of_sale, 'Caixa', PaginaCaixa(a)),
