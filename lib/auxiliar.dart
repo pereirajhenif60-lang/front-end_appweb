@@ -317,7 +317,7 @@ class PaginaConcluirAtendimento extends StatelessWidget {
                     Text(x.cliente.nome),
                     Text(x.servico),
                     celulaTempo(x),
-                    Text(x.lancado ? '${formatarReais(x.valorPago)} (${x.formasPagas})' : 'a lançar'),
+                    celulaPagamento(c, x, autor: auxiliar.nome),
                   ]
               ],
             ),

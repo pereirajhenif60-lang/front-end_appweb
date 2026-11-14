@@ -1,7 +1,10 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'caixa.dart';
+import 'indicadores.dart';
 import 'main.dart';
 import 'recepcao.dart';
 
@@ -346,6 +349,14 @@ class Dados extends ChangeNotifier {
       Atend(19, p, maria, rafael, 'Consulta individual', diasAtras(2, 10), StatusAtend.concluido),
     ]);
 
+    // Atendimentos concluídos já têm horário de início e fim (usados nos indicadores).
+    for (final x in atendimentos) {
+      if (x.status == StatusAtend.concluido && x.iniciadoEm == null) {
+        x.iniciadoEm = x.quando;
+        x.concluidoEm = x.quando.add(Duration(minutes: 40 + (x.id % 4) * 10));
+      }
+    }
+
     // Caixa: lançamentos de exemplo (hoje e dias anteriores).
     Atend at(int id) => atendimentos.firstWhere((x) => x.id == id);
     void lanc(Area area, DateTime data, int valor, FormaPagamento forma,
@@ -405,6 +416,67 @@ class Dados extends ChangeNotifier {
     fecha(p, 1, {px: 12000, db: 0, cr: 0}, {px: 11500, db: 0, cr: 0}, 1,
         'Diferença de R\$ 5,00 no extrato do Pix (tarifa bancária).');
     fecha(p, 2, {px: 0, db: 0, cr: 12000}, {px: 0, db: 0, cr: 12000}, 1);
+
+    // Histórico dos últimos 28 dias (dados de exemplo para o painel de indicadores).
+    final rnd = Random(7);
+    final clientesDe = {e: [julia, fernanda, renata], p: [marina, joao, luiza, maria]};
+    final profsDe = {e: [ana, bia], p: [paula, rafael]};
+    final faltaveis = {fernanda: 0, joao: 0, luiza: 0, maria: 0};
+    for (var d = 3; d <= 28; d++) {
+      final dia = diasAtras(d);
+      if (dia.weekday == DateTime.sunday) continue;
+      for (final area in [e, p]) {
+        if (area == p && dia.weekday == DateTime.saturday) continue;
+        final servs = servicosDe(area);
+        final n = 1 + rnd.nextInt(3);
+        for (var k = 0; k < n; k++) {
+          final cli = clientesDe[area]![rnd.nextInt(clientesDe[area]!.length)];
+          final prof = profsDe[area]![rnd.nextInt(profsDe[area]!.length)];
+          final serv = servs[rnd.nextInt(servs.length)];
+          var hora = 9 + rnd.nextInt(8);
+          if (hora == horaAlmoco) hora++;
+          final quando = diasAtras(d, hora);
+          final sorte = rnd.nextInt(100);
+          var status = StatusAtend.concluido;
+          if (sorte >= 90) {
+            status = StatusAtend.cancelado;
+          } else if (sorte >= 80 && (faltaveis[cli] ?? 9) < 2) {
+            status = StatusAtend.ausente;
+            faltaveis[cli] = faltaveis[cli]! + 1;
+          }
+          final x = Atend(proximoId(), area, cli, prof, serv, quando, status,
+              lembrete: rnd.nextInt(100) < 70 ? StatusLembrete.confirmado : StatusLembrete.enviado);
+          atendimentos.add(x);
+          if (status == StatusAtend.concluido) {
+            final ini = quando.add(Duration(minutes: rnd.nextInt(15)));
+            x.iniciadoEm = ini;
+            x.concluidoEm = ini.add(Duration(minutes: 35 + rnd.nextInt(40)));
+            final forma = [px, db, cr][rnd.nextInt(3)];
+            lanc(area, x.concluidoEm!, valorDoProcedimento(area, serv) ?? 12000, forma,
+                atend: x.id,
+                origem: forma == px ? OrigemLancamento.manual : OrigemLancamento.maquininha,
+                aut: forma == px ? null : '${100000 + rnd.nextInt(899999)}',
+                bandeira: forma == px ? null : bandeiras[rnd.nextInt(3)],
+                parcelas: forma == cr ? 1 + rnd.nextInt(3) : 1);
+          }
+        }
+      }
+    }
+    // Caixas desses dias já fechados (conferidos), para o histórico de fechamentos.
+    for (final area in [e, p]) {
+      for (var d = 3; d <= 28; d++) {
+        final dia = diasAtras(d);
+        final ls = lancamentos
+            .where((l) => l.area == area && mesmoDia(l.data, dia) && l.ativo)
+            .toList();
+        if (ls.isEmpty || fechamentoDe(area, dia) != null) continue;
+        final tot = {
+          for (final f in FormaPagamento.values)
+            f: ls.where((l) => l.forma == f).fold(0, (s, l) => s + l.valorCentavos),
+        };
+        fecha(area, d, tot, {for (final f in FormaPagamento.values) f: tot[f]}, ls.length);
+      }
+    }
   }
 }
 
@@ -1169,7 +1241,7 @@ class _PaginaAtendimentosState extends State<PaginaAtendimentos> {
                                 onPressed: () => _concluir(c, x),
                                 icon: const Icon(Icons.check),
                                 label: const Text('Concluir'))
-                            : const Text('—'),
+                            : celulaPagamento(c, x),
                   ]
               ],
             ),
@@ -1924,6 +1996,8 @@ class VisaoGeral extends StatelessWidget {
                     title: Text(t),
                   ),
                 ),
+            const SizedBox(height: 24),
+            ...secaoAlertasFluxo(c, a),
           ],
         );
       });
@@ -2273,6 +2347,7 @@ class AdminPanel extends StatelessWidget {
         SecaoPainel(Icons.point_of_sale, 'Caixa', PaginaCaixa(a)),
         if (a == Area.psicologia)
           const SecaoPainel(Icons.low_priority, 'Triagem', PaginaTriagem()),
+        SecaoPainel(Icons.insights, 'Painel de indicadores', PainelIndicadores(a)),
         SecaoPainel(Icons.bar_chart, 'Indicadores e relatórios', PaginaIndicadores(a)),
         const SecaoPainel(Icons.shield, 'Controle de acesso', PaginaAcesso()),
         SecaoPainel(Icons.history, 'Auditoria', PaginaAuditoria(a)),

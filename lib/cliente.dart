@@ -658,6 +658,12 @@ class MeusAgendamentos extends StatelessWidget {
                         chipStatus(x.status),
                         if (x.aberto) chipConfirmacao(x),
                         if (chipSenhaDoCliente(x) != null) chipSenhaDoCliente(x)!,
+                        if (x.status == StatusAtend.concluido)
+                          x.lancado
+                              ? chipRotulo('Pago ${formatarReais(x.valorPago)}', Colors.green,
+                                  icone: Icons.payments)
+                              : chipRotulo('Pagamento pendente', Colors.orange,
+                                  icone: Icons.hourglass_bottom),
                       ]),
                       if (x.avisoClinica != null) ...[
                         const SizedBox(height: 8),

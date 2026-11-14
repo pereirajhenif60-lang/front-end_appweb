@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'admin.dart';
+import 'caixa.dart';
+import 'indicadores.dart';
 import 'main.dart';
 
 // ───────────────────────── Modelo da fila ─────────────────────────
@@ -76,8 +78,35 @@ class SenhaFila {
 
 /// Fila de atendimento em memória. Troque pelo seu backend.
 class FilaAtendimento extends ChangeNotifier {
+  FilaAtendimento() {
+    _semear();
+  }
+
   final _senhas = <SenhaFila>[];
   int _seq = 0;
+
+  /// Todas as senhas da área (inclui dias anteriores), para os indicadores.
+  List<SenhaFila> historico(Area a) => _senhas.where((s) => s.area == a).toList();
+
+  /// Senhas de dias anteriores (dados de exemplo para o painel de indicadores).
+  void _semear() {
+    for (final x in dados.atendimentos) {
+      final ini = x.iniciadoEm;
+      if (x.status != StatusAtend.concluido || ini == null) continue;
+      if (mesmoDia(x.quando, DateTime.now())) continue;
+      _senhas.add(SenhaFila(
+        id: ++_seq,
+        codigo: '${x.area == Area.estetica ? 'E' : 'P'}${(x.id % 100).toString().padLeft(3, '0')}',
+        atend: x,
+        preferencial: false,
+        semAgendamento: x.id % 7 == 0,
+        chegada: ini.subtract(Duration(minutes: 6 + (x.id * 7) % 34)),
+      )
+        ..status = StatusSenha.emAtendimento
+        ..chamadaEm = ini.subtract(const Duration(minutes: 2))
+        ..chamadas = 1);
+    }
+  }
 
   void mudou() => notifyListeners();
 
@@ -654,6 +683,10 @@ class PaginaRecepcao extends StatelessWidget {
                 label: const Text('Abrir painel da fila')),
           ],
           filhos: [
+            ...secaoAlertasFluxo(c, area,
+                so: {CategoriaAlerta.fila, CategoriaAlerta.atendimento},
+                titulo: false,
+                mostrarVazio: false),
             Wrap(spacing: 16, runSpacing: 16, children: [
               kpi(Icons.hourglass_bottom, 'Aguardando', '${aguardando.length}', Colors.blue),
               kpi(Icons.campaign_outlined, 'Chamados', '${chamados.length}', Colors.orange),
@@ -718,10 +751,7 @@ class PaginaRecepcao extends StatelessWidget {
                     Text(x.servico),
                     Text(x.prof.nome),
                     celulaTempo(x),
-                    x.lancado
-                        ? chipRotulo('${formatarReais(x.valorPago)} (${x.formasPagas})', Colors.green,
-                            icone: Icons.payments)
-                        : chipRotulo('a lançar no caixa', Colors.orange, icone: Icons.hourglass_bottom),
+                    celulaPagamento(c, x, autor: autor),
                   ]
               ],
             ),
@@ -766,7 +796,15 @@ Future<void> concluirAtendimento(BuildContext c, Atend x, {String? autor}) async
   final ok = await showDialog<bool>(
       context: c, builder: (_) => ConcluirAtendimentoDialog(x: x, autor: autor));
   if (ok == true && c.mounted) {
-    msg(c, 'Atendimento concluído. Disponível para lançamento no caixa.');
+    ScaffoldMessenger.of(c).showSnackBar(SnackBar(
+      content: const Text('Atendimento concluído. Disponível para lançamento no caixa.'),
+      action: SnackBarAction(
+        label: 'Receber pagamento',
+        onPressed: () {
+          if (c.mounted) receberPagamento(c, x, autor: autor);
+        },
+      ),
+    ));
   }
 }
 

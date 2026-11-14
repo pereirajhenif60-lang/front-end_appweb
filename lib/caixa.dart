@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'admin.dart';
 import 'main.dart';
+import 'recepcao.dart';
 
 // ───── caixa/modelos.dart ─────
 /// Formas de pagamento aceitas. Dinheiro NÃO é aceito.
@@ -305,10 +306,11 @@ class _LancarValorDialogState extends State<_LancarValorDialog> {
 /// Venda feita na maquininha de cartão (lançamento manual por enquanto).
 class _VendaMaquininhaDialog extends StatefulWidget {
   const _VendaMaquininhaDialog(
-      {required this.area, required this.pendentes, this.autor = admLogin});
+      {required this.area, required this.pendentes, this.inicial, this.autor = admLogin});
 
   final Area area;
   final List<Atend> pendentes;
+  final Atend? inicial;
   final String autor;
 
   @override
@@ -325,6 +327,14 @@ class _VendaMaquininhaDialogState extends State<_VendaMaquininhaDialog> {
   String _bandeira = bandeiras.first;
   Atend? _atend;
   String? _erro;
+
+  @override
+  void initState() {
+    super.initState();
+    _atend = widget.inicial;
+    final i = _atend;
+    if (i != null) _valor.text = _valorTabela(i);
+  }
 
   @override
   void dispose() {
@@ -703,6 +713,8 @@ class _FecharCaixaDialogState extends State<_FecharCaixaDialog> {
   late final List<Lancamento> _estornos;
   late final List<Lancamento> _semVinc;
   late final List<Atend> _pend;
+  late final List<Atend> _andamento;
+  late final int _naFila;
   final _conf = {for (final f in FormaPagamento.values) f: TextEditingController()};
   final _obs = TextEditingController();
   bool _ciente = false;
@@ -749,6 +761,16 @@ class _FecharCaixaDialogState extends State<_FecharCaixaDialog> {
     _estornos = todos.where((l) => l.estornado).toList();
     _semVinc = dados.semVinculoDe(widget.area, widget.dia);
     _pend = pendentesDoDia(widget.area, widget.dia);
+    final hoje = mesmoDia(widget.dia, DateTime.now());
+    _andamento = dados
+        .doArea(widget.area)
+        .where((x) =>
+            x.status == StatusAtend.emAtendimento && (hoje || mesmoDia(x.quando, widget.dia)))
+        .toList();
+    _naFila = hoje
+        ? filaAtendimento.aguardando(widget.area).length +
+            filaAtendimento.chamados(widget.area).length
+        : 0;
   }
 
   @override
@@ -774,6 +796,7 @@ class _FecharCaixaDialogState extends State<_FecharCaixaDialog> {
       });
 
   void _fechar() {
+    if (_semVinc.isNotEmpty || _andamento.isNotEmpty) return;
     for (final f in FormaPagamento.values) {
       final t = _conf[f]!.text.trim();
       if (t.isNotEmpty && parseCentavos(t) == null) {
@@ -790,7 +813,7 @@ class _FecharCaixaDialogState extends State<_FecharCaixaDialog> {
       return;
     }
     final obs = _obs.text.trim();
-    if ((_divergencia != 0 || _pend.isNotEmpty) && obs.length < 5) {
+    if ((_divergencia != 0 || _pend.isNotEmpty || _naFila > 0) && obs.length < 5) {
       setState(() => _erro = 'Explique a divergência ou as pendências na observação.');
       return;
     }
@@ -831,7 +854,7 @@ class _FecharCaixaDialogState extends State<_FecharCaixaDialog> {
   Widget build(BuildContext context) {
     final lancado = _ativos.fold(0, (s, l) => s + l.valorCentavos);
     final dif = _divergencia;
-    final bloqueado = _semVinc.isNotEmpty;
+    final bloqueado = _semVinc.isNotEmpty || _andamento.isNotEmpty;
     final valorPend = _pend.fold(0, (s, x) => s + (valorDoProcedimento(x.area, x.servico) ?? 0));
 
     return AlertDialog(
@@ -851,6 +874,13 @@ class _FecharCaixaDialogState extends State<_FecharCaixaDialog> {
                 : _verif(Icons.warning_amber, Colors.orange,
                     '${_pend.length} atendimento(s) concluído(s) sem lançamento'
                     '${valorPend > 0 ? ' (valor de tabela ${formatarReais(valorPend)})' : ''}.'),
+            _andamento.isEmpty
+                ? _verif(Icons.check_circle, Colors.green, 'Nenhum atendimento em andamento.')
+                : _verif(Icons.block, Colors.red,
+                    '${_andamento.length} atendimento(s) ainda em andamento (${_andamento.map((x) => x.cliente.nome).join(', ')}). Conclua antes de fechar o caixa.'),
+            if (_naFila > 0)
+              _verif(Icons.warning_amber, Colors.orange,
+                  '$_naFila cliente(s) ainda na fila de espera: explique na observação.'),
             _verif(Icons.undo, Colors.blueGrey,
                 '${_estornos.length} lançamento(s) estornado(s): não entram no total.'),
             const SizedBox(height: 12),
@@ -942,7 +972,7 @@ class _FecharCaixaDialogState extends State<_FecharCaixaDialog> {
               controller: _obs,
               maxLines: 3,
               decoration: decoracaoCampo(
-                  (dif != 0 || _pend.isNotEmpty) ? 'Observação (obrigatória)' : 'Observação (opcional)'),
+                  (dif != 0 || _pend.isNotEmpty || _naFila > 0) ? 'Observação (obrigatória)' : 'Observação (opcional)'),
             ),
             _erroTexto(context, _erro),
           ]),
@@ -965,6 +995,54 @@ class FileType {
 
 class FilePicker {
   static get platform => null;
+}
+
+// ───── caixa/pagamento_do_atendimento.dart ─────
+/// Receber o pagamento de um atendimento concluído direto do fluxo de atendimento
+/// (recepção, painel do auxiliar e do administrador). Respeita o caixa do dia.
+Future<void> receberPagamento(BuildContext c, Atend x,
+    {String? autor, bool maquininha = false}) async {
+  final a = x.area;
+  if (x.status != StatusAtend.concluido) {
+    alerta(c, 'Atendimento não concluído', 'Conclua o atendimento antes de receber o pagamento.');
+    return;
+  }
+  if (x.lancado) {
+    alerta(c, 'Pagamento já lançado',
+        '${x.cliente.nome}: ${formatarReais(x.valorPago)} (${x.formasPagas}).');
+    return;
+  }
+  if (dados.caixaFechado(a, DateTime.now())) {
+    alerta(c, 'Caixa fechado',
+        'O caixa de hoje já foi fechado, por isso o pagamento não pode ser lançado. Peça ao Administrador para reabrir o caixa (fica registrado).');
+    return;
+  }
+  final pend = dados.pendentes(a);
+  await showDialog<void>(
+    context: c,
+    builder: (_) => maquininha
+        ? _VendaMaquininhaDialog(area: a, pendentes: pend, inicial: x, autor: autor ?? admLogin)
+        : _LancarValorDialog(area: a, pendentes: pend, inicial: x, autor: autor ?? admLogin),
+  );
+}
+
+/// Pagamento do atendimento: mostra o valor pago ou os botões para receber o pagamento.
+Widget celulaPagamento(BuildContext c, Atend x, {String? autor}) {
+  if (x.status != StatusAtend.concluido) return const Text('—');
+  if (x.lancado) {
+    return chipRotulo('${formatarReais(x.valorPago)} (${x.formasPagas})', Colors.green,
+        icone: Icons.payments);
+  }
+  return Row(mainAxisSize: MainAxisSize.min, children: [
+    TextButton.icon(
+        onPressed: () => receberPagamento(c, x, autor: autor),
+        icon: const Icon(Icons.add_card),
+        label: const Text('Receber')),
+    TextButton.icon(
+        onPressed: () => receberPagamento(c, x, autor: autor, maquininha: true),
+        icon: const Icon(Icons.point_of_sale),
+        label: const Text('Maquininha')),
+  ]);
 }
 
 // ───── caixa/pagina_caixa.dart ─────
@@ -1133,6 +1211,11 @@ class _PaginaCaixaState extends State<PaginaCaixa> {
         final estornados = lancs.where((l) => l.estornado).toList();
         final semVinc = dados.semVinculoDe(a, _dia);
         final pend = pendentesDoDia(a, _dia);
+        final andamento = dados
+            .doArea(a)
+            .where((x) =>
+                x.status == StatusAtend.emAtendimento && (_hoje || mesmoDia(x.quando, _dia)))
+            .length;
         final total = ativos.fold(0, (s, l) => s + l.valorCentavos);
         int porForma(FormaPagamento f) =>
             ativos.where((l) => l.forma == f).fold(0, (s, l) => s + l.valorCentavos);
@@ -1350,6 +1433,16 @@ class _PaginaCaixaState extends State<PaginaCaixa> {
                           child: Text(pend.isEmpty
                               ? 'Todos os atendimentos concluídos têm lançamento.'
                               : '${pend.length} atendimento(s) concluído(s) sem lançamento.')),
+                    ]),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      Icon(andamento == 0 ? Icons.check_circle : Icons.block,
+                          color: andamento == 0 ? Colors.green : Colors.red, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: Text(andamento == 0
+                              ? 'Nenhum atendimento em andamento.'
+                              : '$andamento atendimento(s) em andamento: conclua antes de fechar.')),
                     ]),
                     const SizedBox(height: 12),
                     const Text('No fechamento você confere o valor de cada forma de pagamento (extrato do Pix e relatório das maquininhas) e registra qualquer divergência.',
