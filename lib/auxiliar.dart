@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'admin.dart';
 import 'caixa.dart';
+import 'gestao.dart';
 import 'main.dart';
 import 'recepcao.dart';
 
@@ -20,6 +21,7 @@ class AuxiliarPanel extends StatelessWidget {
       area: area,
       titulo: '${auxiliar.nome} • ${area.nome}',
       podeTrocarArea: false,
+      faixa: FaixaOrientacoes(publico: PublicoAlvo.auxiliar, usuario: auxiliar),
       sair: (c) => botaoSair(c,
           acao: 'Logout do auxiliar', area: area, autor: auxiliar.nome),
       secoes: [
@@ -30,6 +32,7 @@ class AuxiliarPanel extends StatelessWidget {
         SecaoPainel(Icons.login, 'Receber cliente', PaginaReceberCliente(auxiliar)),
         SecaoPainel(Icons.task_alt, 'Concluir atendimento', PaginaConcluirAtendimento(auxiliar)),
         SecaoPainel(Icons.point_of_sale, 'Caixa', PaginaCaixa(area, auxiliar: auxiliar)),
+        const SecaoPainel(Icons.menu_book_outlined, 'Instruções de uso', PaginaGuiaDeUso(PublicoAlvo.auxiliar)),
       ],
     );
   }

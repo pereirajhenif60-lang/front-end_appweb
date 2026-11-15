@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'caixa.dart';
+import 'gestao.dart';
 import 'indicadores.dart';
 import 'main.dart';
 import 'recepcao.dart';
@@ -746,6 +747,7 @@ const _matriz = <(String, String)>[
   ('Agendar serviço', 'TX'),
   ('Remarcar/cancelar serviço', 'TXC'),
   ('Alterar agendamento (agenda interna)', 'TX'),
+  ('Revisar fluxos e telas, instruções de uso e orientar usuários', ''),
 ];
 
 class PaginaAcesso extends StatelessWidget {
@@ -2213,6 +2215,7 @@ class PainelComMenu extends StatefulWidget {
     required this.secoes,
     required this.sair,
     this.podeTrocarArea = true,
+    this.faixa,
   });
 
   final Area area;
@@ -2220,6 +2223,9 @@ class PainelComMenu extends StatefulWidget {
   final List<SecaoPainel> secoes;
   final Widget Function(BuildContext) sair;
   final bool podeTrocarArea;
+
+  /// Faixa opcional no topo de todas as telas do painel (ex.: orientações da clínica).
+  final Widget? faixa;
 
   @override
   State<PainelComMenu> createState() => _PainelComMenuState();
@@ -2314,7 +2320,12 @@ class _PainelComMenuState extends State<PainelComMenu> {
                   ),
                 ),
               ),
-            Expanded(child: s[_i].pagina),
+            Expanded(
+              child: Column(children: [
+                if (widget.faixa != null) widget.faixa!,
+                Expanded(child: s[_i].pagina),
+              ]),
+            ),
           ]),
         ),
       ),
@@ -2349,6 +2360,10 @@ class AdminPanel extends StatelessWidget {
           const SecaoPainel(Icons.low_priority, 'Triagem', PaginaTriagem()),
         SecaoPainel(Icons.insights, 'Painel de indicadores', PainelIndicadores(a)),
         SecaoPainel(Icons.bar_chart, 'Indicadores e relatórios', PaginaIndicadores(a)),
+        SecaoPainel(Icons.account_tree_outlined, 'Revisar fluxos', PaginaRevisaoFluxos(a)),
+        const SecaoPainel(Icons.fact_check_outlined, 'Revisar telas operacionais', PaginaRevisaoTelas()),
+        const SecaoPainel(Icons.menu_book_outlined, 'Instruções de uso', PaginaInstrucoes()),
+        const SecaoPainel(Icons.school_outlined, 'Orientar usuários', PaginaOrientarUsuarios()),
         const SecaoPainel(Icons.shield, 'Controle de acesso', PaginaAcesso()),
         SecaoPainel(Icons.history, 'Auditoria', PaginaAuditoria(a)),
       ],

@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'admin.dart';
+import 'gestao.dart';
 import 'main.dart';
 import 'recepcao.dart';
 
@@ -246,6 +247,10 @@ class _ClienteHomeState extends State<ClienteHome> {
               child: ListView(
                 padding: EdgeInsets.all(cel ? 12 : 24),
                 children: [
+                  FaixaOrientacoes(
+                      publico: PublicoAlvo.cliente,
+                      usuario: u,
+                      margem: const EdgeInsets.only(bottom: 12)),
                   Text('Olá, ${u.primeiroNome}!',
                       style: (cel
                               ? Theme.of(context).textTheme.titleLarge
@@ -253,6 +258,14 @@ class _ClienteHomeState extends State<ClienteHome> {
                           ?.copyWith(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
                   const Text('Escolha a área e agende o seu atendimento.'),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => abrirGuiaDeUso(context, PublicoAlvo.cliente),
+                      icon: const Icon(Icons.help_outline),
+                      label: const Text('Como usar'),
+                    ),
+                  ),
                   const SizedBox(height: 16),
                   Row(children: [
                     _cartaoArea(Area.estetica, cel),
